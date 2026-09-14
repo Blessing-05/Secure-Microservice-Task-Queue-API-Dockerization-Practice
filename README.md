@@ -1,344 +1,416 @@
-# Distributed Rate-Limiter API Gateway — Dockerization Practice
+# Secure Microservice Task Queue API — Dockerization Practice
 
-##  My Focus: Learning Docker Through Containerization
+## My Focus: Learning Docker Through Containerization
 
-**My primary contribution to this project was Dockerizing an existing Python application to strengthen my practical understanding of Docker and containerization.**
+My primary contribution to this project was containerizing an existing Python application to practice Docker and understand how applications are packaged and run inside containers.
 
-The application code was **provided to me for practice**. I did **not write or develop the Python rate-limiting application logic**. Instead, I studied the application's requirements and created the `Dockerfile` myself to practice applying Docker concepts I have been learning.
-
-My focus was understanding how to take an existing application and turn it into a reproducible, isolated container while applying Docker best practices such as:
+The application code was provided to me for practice. I did not write or develop the Python task queue application logic. Instead, I studied the application's requirements and created the Dockerfile myself to practice:
 
 * Multi-stage Docker builds
-* Build and runtime stage separation
-* Dependency installation and transfer
-* Docker image layering
+* Dependency installation
+* Docker image structure
+* File paths between build stages
 * Working directories
-* `COPY` behavior and source/destination paths
 * Non-root container execution
-* File ownership and permissions
-* Container ports
-* Gunicorn as the application server
-* Understanding what belongs in the image versus what belongs in the application
+* File permissions
+* Port configuration
+* Container startup commands
 
-This project is primarily a **Docker learning and containerization exercise**, rather than an application-development project.
+This project is focused on my Docker learning rather than application development.
 
 ---
 
 ## Project Overview
 
-This project uses a Python Flask application that acts as an API Gateway-style proxy.
+The **Secure Microservice Task Queue API** is a small Python Flask application that uses SQLite for task storage and Gunicorn as the application server.
 
-The provided application uses:
+For this exercise, my focus was on creating a Docker image that packages the application and its dependencies into a runnable container.
 
-* **Flask** for the web application
-* **Redis** for rate-limit data
-* **Gunicorn** as the WSGI server
-* **Requests** for forwarding requests to the backend
+The application runs as a **single container**, so no Docker network or second container is required for this exercise.
 
-The application's logic implements a sliding-window rate limiter using Redis before forwarding requests to a backend service.
+### Technologies
 
-Again, the application itself was provided for this exercise. My work focused on understanding and containerizing it with Docker.
+* Python
+* Flask
+* Gunicorn
+* SQLite
+* Docker
+* Alpine Linux
 
 ---
 
-## Docker Implementation
+# Docker Implementation
 
-I created a **multi-stage Dockerfile** consisting of two stages:
+I used a **multi-stage Dockerfile** with two stages:
 
 ```text
 Stage 1: Builder
-        │
-        ├── Python 3.11 Alpine
-        ├── Copy requirements.txt
-        └── Install dependencies into /install
-                    │
-                    ▼
+    |
+    | Install Python dependencies
+    v
+/install
+    |
+    | COPY --from=builder
+    v
 Stage 2: Runtime
-        │
-        ├── Python 3.11 Alpine
-        ├── Copy dependencies from builder
-        ├── Copy application
-        ├── Create non-root user
-        ├── Change ownership
-        └── Run application as non-root
+    |
+    | Application + dependencies
+    | Non-root user
+    v
+Final Docker Image
 ```
 
-### Stage 1 — Builder
+The purpose of separating the build and runtime stages is to keep the final image focused on what is required to run the application.
 
-The first stage is responsible for installing the Python dependencies.
+---
+
+# Dockerfile
 
 ```dockerfile
+# --- Stage 1: Build Stage ---
 FROM python:3.11-alpine AS builder
+
+# Creating the directory it will start working on
+WORKDIR /app
+
+# Copying my dependency file into the current directory /app
+COPY requirements.txt .
+
+# Install dependencies into /install and --no-cache-dir tells pip not to keep the downloaded packages
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# --- Stage 2: Runtime Stage ---
+FROM python:3.11-alpine AS runtime
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Copying dependency from builder
+COPY --from=builder /install /usr/local
 
+# Copying the main file into the current directory
+COPY app.py .
+
+# Creating the user named bmuser and giving it permissions to the file
+RUN adduser -D bmuser && chown -R bmuser:bmuser /app
+
+# Run the app as non root user
+USER bmuser
+
+# Flask listens on port 5000
+EXPOSE 5000
+
+# Starting the application
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+```
+
+---
+
+# Stage 1: Build Stage
+
+```dockerfile
+FROM python:3.11-alpine AS builder
+```
+
+This creates the first stage using Python 3.11 on Alpine Linux.
+
+I named the stage:
+
+```text
+builder
+```
+
+so that I can refer to it later.
+
+### Working Directory
+
+```dockerfile
+WORKDIR /app
+```
+
+This creates `/app` as the working directory inside the builder stage.
+
+### Copy Dependencies
+
+```dockerfile
+COPY requirements.txt .
+```
+
+This copies `requirements.txt` from my project directory into `/app` inside the container.
+
+### Install Dependencies
+
+```dockerfile
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 ```
 
-### What I Practiced
-
-The important concept I was learning here was:
-
-```dockerfile
---prefix=/install
-```
-
-Instead of installing the dependencies directly into the normal Python environment, I installed them into:
+The dependencies are installed into:
 
 ```text
 /install
 ```
 
-This allowed me to transfer the installed dependencies into the final runtime stage using:
+The `--no-cache-dir` option prevents pip from keeping its downloaded package cache.
 
-```dockerfile
-COPY --from=builder /install /usr/local
-```
-
-This helped me understand one of the key concepts behind multi-stage Docker builds: **artifacts can be created in one stage and selectively copied into another stage.**
+The important Docker concept I practiced here is that the dependencies are deliberately installed into a separate location so they can be copied into the runtime stage.
 
 ---
 
-## Stage 2 — Runtime
-
-The second stage contains what is required to run the application.
+# Stage 2: Runtime Stage
 
 ```dockerfile
 FROM python:3.11-alpine AS runtime
+```
 
+This starts a new image stage for running the application.
+
+The runtime stage is separate from the builder stage.
+
+### Working Directory
+
+```dockerfile
 WORKDIR /app
+```
 
+The application will work from `/app`.
+
+### Copy Dependencies From Builder
+
+```dockerfile
 COPY --from=builder /install /usr/local
+```
 
+This was one of the main Docker concepts I practiced.
+
+It means:
+
+```text
+From the builder stage:
+    /install
+
+Copy it into the runtime stage:
+    /usr/local
+```
+
+The dependencies installed during Stage 1 are therefore available in Stage 2.
+
+### Copy Application Code
+
+```dockerfile
 COPY app.py .
+```
 
+This copies `app.py` from my project directory into the current working directory:
+
+```text
+/app/app.py
+```
+
+---
+
+# Running as a Non-Root User
+
+```dockerfile
 RUN adduser -D bmuser && chown -R bmuser:bmuser /app
-
 USER bmuser
+```
 
+I created a non-root user called `bmuser` and gave that user ownership of the application directory.
+
+The container then runs the application as:
+
+```text
+bmuser
+```
+
+instead of the default root user.
+
+This allowed me to practice the Docker concept of running containers with a non-root user.
+
+---
+
+# Port Configuration
+
+```dockerfile
 EXPOSE 5000
+```
 
+The Flask/Gunicorn application listens on port `5000` inside the container.
+
+When running the container, I map my host port `1912` to the container's port `5000`:
+
+```text
+Host                  Container
+1912       ------>    5000
+```
+
+This is done with:
+
+```bash
+-p 1912:5000
+```
+
+---
+
+# Starting the Container
+
+The application is started with:
+
+```dockerfile
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
 ```
 
-### Why I Structured It This Way
-
-I wanted to understand the difference between:
-
-**Build environment**
-
-and
-
-**Runtime environment**
-
-The builder stage handles dependency installation, while the runtime stage receives the installed dependencies and application source needed to run the application.
-
-This gave me practical experience with:
-
-```text
-COPY --from=builder
-```
-
-and understanding exactly where files are located in each Docker stage.
+This tells Docker to start Gunicorn and bind the application to port `5000`.
 
 ---
 
-## Running as a Non-Root User
-
-Another Docker concept I practiced was running the application as a non-root user.
-
-Instead of leaving the container running as Docker's default `root` user, I created:
-
-```dockerfile
-RUN adduser -D bmuser
-```
-
-Then changed ownership of the application directory:
-
-```dockerfile
-RUN adduser -D bmuser && chown -R bmuser:bmuser /app
-```
-
-And switched the container to that user:
-
-```dockerfile
-USER bmuser
-```
-
-This helped me understand the importance of **least privilege inside containers** and how file ownership affects whether an application can access the files it needs.
-
----
-
-##  Project Structure
+# Project Structure
 
 ```text
-distributed-rate-limiter/
+secure-task-queue-api/
 │
 ├── app.py
 ├── requirements.txt
-├── Dockerfile
-└── README.md
+└── Dockerfile
 ```
 
-### File Responsibilities
+### `app.py`
 
-| File               | Purpose                         |
-| ------------------ | ------------------------------- |
-| `app.py`           | Provided Python application     |
-| `requirements.txt` | Python dependencies             |
-| `Dockerfile`       | My Docker containerization work |
-| `README.md`        | Project documentation           |
+The provided Flask application.
 
----
+### `requirements.txt`
 
-## 🛠️ Technologies
-
-* **Docker**
-* **Docker Multi-Stage Builds**
-* **Python 3.11**
-* **Alpine Linux**
-* **Flask**
-* **Gunicorn**
-* **Redis**
-
----
-
-## Building the Image
-
-Build the Docker image with:
-
-```bash
-docker build -t rate-limiter-gateway-image .
-```
-
-Run the container:
-
-```bash
-docker run -d --name rate-limiter-gateway-image-container -p 1912:5000 rate-limiter-gateway-image
-```
-
-The application will then be available on:
+Contains the Python dependencies:
 
 ```text
-http://localhost:1912
+flask==3.0.0
+gunicorn==21.2.0
+```
+
+### `Dockerfile`
+
+The Docker configuration I created to containerize the application.
+
+---
+
+# Building the Docker Image
+
+I built the Docker image with:
+
+```bash
+docker build -t task-queue-api-image .
+```
+
+Breakdown:
+
+```text
+docker build       Build an image
+-t task-queue-api  Give the image a name
+.                  Use the current directory as the build context
+```
+
+The resulting image is named:
+
+```text
+task-queue-api
 ```
 
 ---
 
-## Docker Concepts Practiced
+# Running the Container
 
-This project was specifically useful for reinforcing the following Docker concepts:
+I run the image as a detached container with:
 
-### 1. Multi-Stage Builds
-
-Understanding why a Dockerfile can have multiple `FROM` instructions and how files can be transferred between stages.
-
-### 2. `WORKDIR`
-
-Understanding how:
-
-```dockerfile
-WORKDIR /app
+```bash
+docker run -d --name my_task_api -p 1912:5000 task-queue-api-image
 ```
 
-sets the working directory for subsequent Dockerfile instructions.
+Breakdown:
 
-### 3. `COPY`
-
-Practicing the difference between copying files from the local build context:
-
-```dockerfile
-COPY app.py .
+```text
+docker run              Create and start a container
+-d                      Run in detached mode
+--name my_task_api     Give the container a name
+-p 1912:5000           Map host port 1912 to container port 5000
+task-queue-api         Use the Docker image
 ```
 
-and copying files from another Docker build stage:
-
-```dockerfile
-COPY --from=builder /install /usr/local
-```
-
-### 4. Dependency Installation
-
-Understanding how Python dependencies are installed during the image build process and made available to the runtime container.
-
-### 5. Non-Root Containers
-
-Practicing how to create a dedicated user and run the application without root privileges.
-
-### 6. File Permissions
-
-Understanding why the application directory needs appropriate ownership when switching from `root` to an unprivileged user.
-
-### 7. Container Ports
-
-Understanding the role of:
-
-```dockerfile
-EXPOSE 5000
-```
-
-and how it relates to Docker's runtime port mapping.
-
-### 8. Container Startup
-
-Understanding how the `CMD` instruction determines the default process executed when the container starts.
+For this exercise, I am focusing on successfully building the Docker image and starting the container. I am not testing or developing the API functionality.
 
 ---
 
-## Key Learning Outcome
+# Docker Concepts Practiced
 
-The biggest takeaway from this project was learning to think about Docker as a **containerization layer around an application**.
+Through this project, I practiced:
 
-Rather than focusing on writing the application itself, I focused on questions such as:
-
-> What does this application need to run?
-
-> Where should its dependencies be installed?
-
-> Which files need to be inside the final image?
-
-> What should happen during the build stage versus the runtime stage?
-
-> Which user should the application run as?
-
-> Where are files located inside each Docker stage?
-
-These questions helped me move beyond simply memorizing Docker commands and start understanding **why each Dockerfile instruction is being used**.
-
----
-
-## Scope & Transparency
-
-To be transparent:
-
-**I did not write the Python application or implement the rate-limiting logic.**
-
-The application was provided as a learning exercise.
-
-My contribution was creating the Dockerfile and using the project to practice my understanding of **Docker containerization, multi-stage builds, dependencies, file paths, permissions, and non-root execution.**
-
-I believe documenting this distinction is important because the purpose of this project is to demonstrate my **Docker learning and hands-on containerization practice**, rather than claim ownership of application development that I did not perform.
+1. Multi-stage Docker builds
+2. Builder and runtime stages
+3. `FROM`
+4. `AS`
+5. `WORKDIR`
+6. `COPY`
+7. `COPY --from`
+8. Installing dependencies inside an image
+9. Understanding source and destination paths
+10. Running containers as a non-root user
+11. File ownership with `chown`
+12. `EXPOSE`
+13. `CMD`
+14. Docker image naming
+15. Port mapping with `-p`
+16. Running containers in detached mode with `-d`
+17. Understanding the difference between an image and a container
 
 ---
 
-## Next Steps
+# Key Learning Outcome
 
-As I continue developing my Docker skills, I plan to build on this knowledge by practicing:
+The main goal of this project was not to develop the Python application.
+
+My goal was to understand how to take an existing application and create a Docker image that contains what is required to run it.
+
+In particular, I practiced understanding:
+
+* What belongs in the builder stage
+* What belongs in the runtime stage
+* How dependencies move from one stage to another
+* How `COPY --from=builder` works
+* How Docker paths work
+* How a container starts an application
+* How port mapping works
+* Why running as a non-root user is useful
+* The difference between building an image and running a container
+
+---
+
+# Scope & Transparency
+
+The Python application code was provided to me as a practice application.
+
+I did **not** write the Flask task queue application logic.
+
+My contribution to this exercise was creating and understanding the Dockerfile and using Docker to build and run the application as a container.
+
+This project therefore represents my **Docker/containerization practice**, rather than claiming ownership of the underlying application development.
+
+---
+
+# Next Steps
+
+After becoming comfortable with these Docker fundamentals, my planned progression is:
 
 * Docker networking
-* Volumes and persistent data
+* Docker volumes
 * Docker Compose
-* Image optimization
-* Build caching
+* Docker image optimization
+* Docker build caching
 * Container security
-* Container registries
-* AWS container services such as Amazon ECR and ECS
+* Amazon ECR
+* Amazon ECS/Fargate
 
 ---
 
-## About This Project
+# About This Project
 
-This project is part of my hands-on journey toward becoming a **Cloud / Cloud Infrastructure Engineer**, with a focus on developing practical skills in Docker, AWS, infrastructure, and cloud technologies.
+This project is part of my hands-on learning journey toward **Cloud Engineering and Cloud Infrastructure**.
 
+I am using small practical projects to build a stronger understanding of Docker, AWS, Terraform, infrastructure, and cloud deployment concepts.

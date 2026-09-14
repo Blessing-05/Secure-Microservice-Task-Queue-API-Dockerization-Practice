@@ -1,56 +1,53 @@
-import os
-import time
-import requests
-import redis
+import sqlite3
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+DB_FILE = "tasks.db"
 
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-BACKEND_URL = os.getenv('BACKEND_URL', 'https://httpbin.org/anything')
-RATE_LIMIT = int(os.getenv('RATE_LIMIT', '5'))  # Max requests
-WINDOW_SIZE = int(os.getenv('WINDOW_SIZE', '60'))  # Time window in seconds
+def init_db():
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                status TEXT DEFAULT 'pending'
+            )
+        ''')
+    conn.close()
 
-cache = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
+init_db()
 
-def is_rate_limited(ip_address: str) -> bool:
-    key = f"rate_limit:{ip_address}"
-    current_time = time.time()
-    pipeline = cache.pipeline()
-    
-    # Sliding window log implementation
-    pipeline.zremrangebyscore(key, 0, current_time - WINDOW_SIZE)
-    pipeline.zadd(key, {str(current_time): current_time})
-    pipeline.zcard(key)
-    pipeline.expire(key, WINDOW_SIZE)
-    results = pipeline.execute()
-    
-    request_count = results[2]
-    return request_count > RATE_LIMIT
-
-@app.route('/proxy', methods=['GET', 'POST'])
-def proxy_request():
-    client_ip = request.remote_addr or "unknown_client"
-    
-    if is_rate_limited(client_ip):
-        return jsonify({
-            "error": "Too Many Requests",
-            "message": f"Rate limit exceeded. Allowed: {RATE_LIMIT} requests per {WINDOW_SIZE}s."
-        }), 429
-
-    # Forward payload to external/mock backend
-    payload = request.get_json() if request.is_json else None
-    response = requests.request(
-        method=request.method,
-        url=BACKEND_URL,
-        json=payload,
-        timeout=5
-    )
-    
+@app.route('/', methods=['GET'])
+def index():
     return jsonify({
-        "status": "Forwarded",
-        "backend_response": response.json() if response.headers.get('content-type') == 'application/json' else response.text
+        "status": "online",
+        "service": "Secure Task Queue API",
+        "endpoints": {
+            "tasks": "/tasks (GET, POST)"
+        }
     }), 200
+
+@app.route('/tasks', methods=['GET'])
+def get_tasks():
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, title, status FROM tasks")
+        tasks = [{"id": row[0], "title": row[1], "status": row[2]} for row in cursor.fetchall()]
+    return jsonify({"count": len(tasks), "tasks": tasks}), 200
+
+@app.route('/tasks', methods=['POST'])
+def add_task():
+    data = request.get_json()
+    if not data or 'title' not in data:
+        return jsonify({"error": "Missing 'title' field"}), 400
+
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO tasks (title) VALUES (?)", (data['title'],))
+        conn.commit()
+        task_id = cursor.lastrowid
+
+    return jsonify({"message": "Task created", "task_id": task_id}), 201
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
