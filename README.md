@@ -321,7 +321,7 @@ task-queue-api
 I run the image as a detached container with:
 
 ```bash
-docker run -d --name my_task_api -p 1912:5000 task-queue-api-image
+docker run -d --name my_task_api -p 1409:5000 task-queue-api-image
 ```
 
 Breakdown:
