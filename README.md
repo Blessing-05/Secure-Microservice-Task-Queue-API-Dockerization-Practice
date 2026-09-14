@@ -330,7 +330,7 @@ Breakdown:
 docker run              Create and start a container
 -d                      Run in detached mode
 --name my_task_api     Give the container a name
--p 1912:5000           Map host port 1912 to container port 5000
+-p 1409:5000           Map host port 1409 to container port 5000
 task-queue-api         Use the Docker image
 ```
 
